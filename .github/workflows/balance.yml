@@ -1,0 +1,199 @@
+# Public runner for the private Aegis-Matrix repo. Only this file is public:
+# each job checks out the game with a read-only deploy key, and only result
+# logs/JSON in out/ are uploaded. Never upload or print game files here.
+# Balance tests on GitHub's machines: AI-vs-AI simulations or the duel grids,
+# spread across many parallel jobs. Start from the Actions tab ("Balance tests"
+# -> Run workflow). Results are attached to the run as artifacts, and a short
+# summary is written to the run page.
+name: Balance tests
+run-name: "Balance ${{ inputs.mode }} ${{ inputs.system }} ${{ inputs.tag }} p${{ inputs.players }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "What to run"
+        type: choice
+        options: [sims, single, nn_batch, size_grid, mark_grid, mod_grid, round_robin]
+        default: sims
+      runs:
+        description: "Sims: games per system"
+        default: "4"
+      minutes:
+        description: "Sims: game minutes before a draw"
+        default: "45"
+      speed:
+        description: "Game speed"
+        default: "4"
+      marks:
+        description: "size_grid: marks to test (space separated)"
+        default: "1 2 3 4"
+      budget:
+        description: "Duel budget"
+        default: "6725"
+      system:
+        description: "single: system id"
+        default: "orion_reach"
+      tag:
+        description: "single: run label (tools/dispatch.sh uses it to find the run)"
+        default: "0"
+      players:
+        description: "Sims: players per match (2-8, all AI)"
+        default: "2"
+      mod:
+        description: "mod_grid: 'mod_id ours foe foe_n dmg1 dmg2 ...' (dmg 'laser' = no Mod); duels per value = runs; tag amove = foes attack-move"
+        default: "mod_interceptor_drones carrier corvette 6 laser 1.5 2.0 2.5"
+
+permissions:
+  contents: read
+
+env:
+  GODOT_URL: https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/Godot_v4.7.2-stable_linux.x86_64.zip
+
+jobs:
+  plan:
+    if: github.repository_owner == 'wesleywesleyadams-debug'
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      # nn_batch reads its game list from the checked-out ref (the nn-train
+      # branch tools/es_train.pl pushes each generation).
+      - if: inputs.mode == 'nn_batch'
+        uses: actions/checkout@v4
+        with:
+          # The game lives in the private Aegis-Matrix repo; this public repo
+          # only holds this workflow. The deploy key is read-only.
+          repository: wesleywesleyadams-debug/Aegis-Matrix
+          ssh-key: ${{ secrets.AEGIS_DEPLOY_KEY }}
+          ref: ${{ inputs.mode == 'nn_batch' && 'nn-train' || 'main' }}
+          persist-credentials: false
+      - id: m
+        run: |
+          if [ "${{ inputs.mode }}" = "nn_batch" ]; then
+            m=$(python3 -c "import json; print(json.dumps(json.load(open('ai/train/jobs.json'))))")
+          elif [ "${{ inputs.mode }}" = "single" ]; then
+            m='[{"system": "${{ inputs.system }}", "run": "${{ inputs.tag }}"}]'
+          elif [ "${{ inputs.mode }}" = "sims" ]; then
+            m=$(python3 -c "import json; print(json.dumps([{'system': s, 'run': r} for s in ['orion_reach','vega_drift','kharon_expanse','tethys_cluster','sable_verge'] for r in range(int('${{ inputs.runs }}'))]))")
+          elif [ "${{ inputs.mode }}" = "round_robin" ]; then
+            m=$(python3 -c "import json; print(json.dumps([{'part': p} for p in range(int('${{ inputs.runs }}'))]))")
+          elif [ "${{ inputs.mode }}" = "mod_grid" ]; then
+            m=$(python3 -c "import json; a='${{ inputs.mod }}'.split(); print(json.dumps([{'dmg': d, 'part': p} for d in a[4:] for p in range(4)]))")
+          elif [ "${{ inputs.mode }}" = "size_grid" ]; then
+            m=$(python3 -c "import json; print(json.dumps([{'mark': m} for m in '${{ inputs.marks }}'.split()]))")
+          else
+            m='[{"mark": "x"}]'
+          fi
+          echo "matrix=$m" >> "$GITHUB_OUTPUT"
+
+  run:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The game lives in the private Aegis-Matrix repo; this public repo
+          # only holds this workflow. The deploy key is read-only.
+          repository: wesleywesleyadams-debug/Aegis-Matrix
+          ssh-key: ${{ secrets.AEGIS_DEPLOY_KEY }}
+          ref: ${{ inputs.mode == 'nn_batch' && 'nn-train' || 'main' }}
+          persist-credentials: false
+      - name: Get Godot
+        run: |
+          curl -sSL "$GODOT_URL" -o godot.zip
+          unzip -q godot.zip
+          mv Godot_v4.7.2-stable_linux.x86_64 godot
+          chmod +x godot
+          echo "GODOT=$PWD/godot" >> "$GITHUB_ENV"
+      - name: Import assets
+        run: ./godot --headless --import --path . || true
+      - name: Simulate
+        if: inputs.mode == 'sims' || inputs.mode == 'single'
+        run: |
+          SL_SYSTEM=${{ matrix.system }} SL_SIM=ci_${{ matrix.run }} SL_SEED=${{ matrix.system }}${{ matrix.run }}${{ github.run_id }} \
+          SL_AI_BUDGET_LOG=1 SL_SIM_MINUTES=${{ inputs.minutes }} SL_SIM_SCALE=${{ inputs.speed }} SL_PLAYERS=${{ inputs.players }} \
+            ./godot --headless --fixed-fps 60 --path . scenes/Main.tscn 2>&1 | tee log.txt | grep -E "SIM RESULT|SCRIPT ERROR" || true
+          mkdir -p out
+          cp log.txt out/${{ matrix.system }}_${{ matrix.run }}.log
+          cp ~/.local/share/Godot/app_userdata/"Aegis Matrix"/sims/*.json out/ 2>/dev/null || cp ~/.local/share/godot/app_userdata/"Aegis Matrix"/sims/*.json out/ 2>/dev/null || true
+      - name: Training game
+        if: inputs.mode == 'nn_batch'
+        run: |
+          OPP="${{ matrix.opp }}"; [ "$OPP" = "-" ] && OPP=""
+          SL_SIM=${{ matrix.tag }} SL_NN_WEIGHTS=${{ matrix.w }} SL_NN_SIDE=${{ matrix.side }} SL_SEED=${{ matrix.seed }} \
+          SL_SYSTEM=${{ matrix.system }} SL_NN_OPP_WEIGHTS="$OPP" SL_AI_BUDGET_LOG=1 SL_SIM_MINUTES=${{ inputs.minutes }} SL_SIM_SCALE=${{ inputs.speed }} \
+            ./godot --headless --fixed-fps 60 --path . res://scenes/Main.tscn 2>&1 | tee log.txt | grep -E "SIM RESULT|SCRIPT ERROR" || true
+          mkdir -p out
+          cp log.txt out/${{ matrix.tag }}.log
+          cp ~/.local/share/Godot/app_userdata/"Aegis Matrix"/sims/*.json out/ 2>/dev/null || true
+      - name: Size grid
+        if: inputs.mode == 'size_grid'
+        run: |
+          mkdir -p out
+          JOBS=4 SPEED=${{ inputs.speed }} BUDGET=${{ inputs.budget }} bash tools/size_grid.sh ${{ matrix.mark }} | tee out/size_mk${{ matrix.mark }}.txt
+      - name: Mod grid
+        if: inputs.mode == 'mod_grid'
+        run: |
+          set -- ${{ inputs.mod }}
+          MOD=$1; [ "${{ matrix.dmg }}" = "laser" ] && MOD=""
+          AM=""; [ "${{ inputs.tag }}" = "amove" ] && AM=1
+          mkdir -p out
+          for r in $(seq 1 ${{ inputs.runs }}); do
+            EXTRA=""; case "${{ inputs.system }}" in *=*) EXTRA="${{ inputs.system }}";; esac
+            env $EXTRA SL_SHOT_OPEN=modduel SL_MOD=$MOD SL_MOD_DMG=$([ -n "$MOD" ] && echo ${{ matrix.dmg }}) SL_OURS=$2 SL_FOE=$3 SL_FOE_N=$4 SL_FOE_AMOVE=$AM SL_DUEL_TECHS=${{ inputs.marks != '1 2 3 4' && inputs.marks || '' }}               SL_DUEL_T=$([ "${{ inputs.minutes }}" -lt 45 ] && echo ${{ inputs.minutes }} || echo 9) SL_DUEL_QUIT=1 SL_DUEL_SPEED=${{ inputs.speed }} SL_NOFOG=1 SL_SHOT="120,1,3"               timeout 300 ./godot --headless --path . scenes/Main.tscn 2>&1 | grep -E "^MODDUEL [a-z_]+:" | sed "s/^/dmg=${{ matrix.dmg }} /" >> out/mod_${{ matrix.dmg }}_${{ matrix.part }}.txt || true
+          done
+      - name: Round robin
+        if: inputs.mode == 'round_robin'
+        # Every line of tools/rr_pairs.txt ("spec,spec"), split across
+        # `runs` jobs, each fought twice in the empty duel arena at equal
+        # budget. minutes = duel time limit in game seconds. Each duel
+        # prints DUELP part-way lines and a final DUEL line.
+        run: |
+          mkdir -p out
+          N=${{ inputs.runs }}; P=${{ matrix.part }}
+          PAIRS=tools/rr_pairs.txt; [ "${{ inputs.tag }}" = "variants" ] && PAIRS=tools/variant_pairs.txt; case "${{ inputs.tag }}" in file=*) PAIRS="${{ inputs.tag }}"; PAIRS="${PAIRS#file=}";; esac
+          EXTRA=""; case "${{ inputs.system }}" in *=*) EXTRA="${{ inputs.system }}";; esac
+          awk -v n=$N -v p=$P 'NF && (NR-1) % n == p' $PAIRS | while read -r pair; do echo "$pair"; echo "$pair"; done |
+            xargs -P 2 -I{} env $EXTRA bash -c 'SL_DUEL={} SL_DUEL_BUDGET=${{ inputs.budget }} SL_DUEL_LIMIT=${{ inputs.minutes }} SL_DUEL_SPEED=${{ inputs.speed }} SL_NOFOG=1               timeout 900 ./godot --headless --path . scenes/Main.tscn 2>&1 | grep -E "^DUELP? |^DSTAT|SCRIPT ERROR" | sed "s|^|[{}] |"' >> out/rr_$P.txt || true
+      - name: Mark grid
+        if: inputs.mode == 'mark_grid'
+        run: |
+          mkdir -p out
+          JOBS=4 SPEED=${{ inputs.speed }} BUDGET=${{ inputs.budget }} bash tools/mark_grid.sh | tee out/mark_grid.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ strategy.job-index }}
+          path: out/
+
+  summary:
+    needs: run
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: results
+          merge-multiple: true
+      - name: Summarize
+        run: |
+          {
+            echo "## Balance tests (${{ inputs.mode }})"
+            echo '```'
+            grep -h "SIM RESULT" results/*.log 2>/dev/null | sort || true
+            cat results/*.txt 2>/dev/null || true
+            echo '```'
+            if ls results/*.log >/dev/null 2>&1; then
+              echo "P1 wins: $(grep -h 'SIM RESULT' results/*.log | grep -c 'winner=1')  P2 wins: $(grep -h 'SIM RESULT' results/*.log | grep -c 'winner=2')  draws: $(grep -h 'SIM RESULT' results/*.log | grep -c 'winner=0')"
+              echo "Script errors: $(grep -h 'SCRIPT ERROR' results/*.log | sort | uniq -c | sort -rn | head -10)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: all-results
+          path: results/
