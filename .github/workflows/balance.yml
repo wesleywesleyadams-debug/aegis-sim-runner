@@ -16,6 +16,9 @@ on:
         type: choice
         options: [sims, single, nn_batch, size_grid, mark_grid, mod_grid, round_robin]
         default: sims
+      game_ref:
+        description: "Game branch to test (test branches for balance experiments)"
+        default: "main"
       runs:
         description: "Sims: games per system"
         default: "4"
@@ -66,7 +69,7 @@ jobs:
           # only holds this workflow. The deploy key is read-only.
           repository: wesleywesleyadams-debug/Aegis-Matrix
           ssh-key: ${{ secrets.AEGIS_DEPLOY_KEY }}
-          ref: ${{ inputs.mode == 'nn_batch' && 'nn-train' || 'main' }}
+          ref: ${{ inputs.mode == 'nn_batch' && 'nn-train' || inputs.game_ref }}
           persist-credentials: false
       - id: m
         run: |
@@ -102,7 +105,7 @@ jobs:
           # only holds this workflow. The deploy key is read-only.
           repository: wesleywesleyadams-debug/Aegis-Matrix
           ssh-key: ${{ secrets.AEGIS_DEPLOY_KEY }}
-          ref: ${{ inputs.mode == 'nn_batch' && 'nn-train' || 'main' }}
+          ref: ${{ inputs.mode == 'nn_batch' && 'nn-train' || inputs.game_ref }}
           persist-credentials: false
       - name: Get Godot
         run: |
