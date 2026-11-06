@@ -26,6 +26,9 @@ on:
       per:
         description: "Games per genome per generation (half vs the AI as written)"
         default: "6"
+      only:
+        description: "validate: genome ids to test (space separated, '' = whole hall of fame)"
+        default: ""
       minutes:
         default: "60"
       speed:
@@ -57,6 +60,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh run download ${{ inputs.parent_run }} -R ${{ github.repository }} -n evo-state -D prev
       - id: p
+        env:
+          EVO_ONLY: ${{ inputs.only }}
         run: |
           S=prev/state.json; [ -f "$S" ] || S=-
           CMD=plan; [ "${{ inputs.mode }}" = validate ] && CMD=vplan
