@@ -1,0 +1,146 @@
+# Evolution of the scripted AI (Aegis-Matrix docs/AI_DESIGN.md, "Evolution").
+# One run = one generation: plan (breed genomes from the parent run's state),
+# play every game in parallel jobs, score, then start the next generation
+# itself until `gens` reaches 0. Only genome JSON and result lines are
+# uploaded; game files never leave the job.
+name: Evolve AI
+run-name: "Evolve gen ${{ inputs.parent_run == '' && '0' || 'next' }} (${{ inputs.gens }} left) ${{ inputs.game_ref }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      game_ref:
+        description: "Game branch with genome support"
+        default: "evo"
+      parent_run:
+        description: "Run id of the previous generation ('' = start fresh)"
+        default: ""
+      gens:
+        description: "Generations left to run (this one included)"
+        default: "1"
+      per:
+        description: "Games per genome per generation (half vs the AI as written)"
+        default: "6"
+      minutes:
+        default: "60"
+      speed:
+        default: "4"
+
+permissions:
+  contents: read
+  actions: write
+
+env:
+  GODOT_URL: https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/Godot_v4.7.2-stable_linux.x86_64.zip
+
+jobs:
+  plan:
+    if: github.repository_owner == 'wesleywesleyadams-debug'
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.p.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: wesleywesleyadams-debug/Aegis-Matrix
+          ssh-key: ${{ secrets.AEGIS_DEPLOY_KEY }}
+          ref: ${{ inputs.game_ref }}
+          persist-credentials: false
+      - name: Previous generation
+        if: inputs.parent_run != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download ${{ inputs.parent_run }} -R ${{ github.repository }} -n evo-state -D prev
+      - id: p
+        run: |
+          S=prev/state.json; [ -f "$S" ] || S=-
+          echo "matrix=$(python3 tools/evolve.py plan $S evo ${{ inputs.per }})" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evo-plan
+          path: evo/
+
+  games:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: wesleywesleyadams-debug/Aegis-Matrix
+          ssh-key: ${{ secrets.AEGIS_DEPLOY_KEY }}
+          ref: ${{ inputs.game_ref }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: evo-plan
+          path: ${{ runner.temp }}/evo
+      - name: Get Godot
+        run: |
+          curl -sSL "$GODOT_URL" -o godot.zip
+          unzip -q godot.zip
+          mv Godot_v4.7.2-stable_linux.x86_64 godot
+          chmod +x godot
+      - name: Import assets
+        run: ./godot --headless --import --path . || true
+      - name: Play
+        env:
+          POP: ${{ runner.temp }}/evo/pop
+        run: |
+          mkdir -p out
+          play() {
+            IFS=, read -r P1 P2 SYS SEED <<< "$1"
+            G1=""; [ "$P1" != ref ] && G1="$POP/$P1.json"
+            G2=""; [ "$P2" != ref ] && G2="$POP/$P2.json"
+            SL_GENOME_1="$G1" SL_GENOME_2="$G2" SL_SYSTEM=$SYS SL_SIM=evo_$SEED SL_SEED=$SEED SL_PLAYERS=2 \
+            SL_SIM_MINUTES=${{ inputs.minutes }} SL_SIM_SCALE=${{ inputs.speed }} \
+              timeout 6000 ./godot --headless --fixed-fps 60 --path . scenes/Main.tscn > "out/$SEED.log" 2>&1 || true
+            grep -E "^GENOME" "out/$SEED.log" | sed "s/^/[$SEED] /" >> out/genome_${{ matrix.job }}.txt || true
+            grep -m1 "SIM RESULT" "out/$SEED.log" | sed "s/^/EVO p1=$P1 p2=$P2 seed=$SEED /" >> out/evo_${{ matrix.job }}.txt || true
+            echo "script errors: $(grep -c 'SCRIPT ERROR' out/$SEED.log)" >> out/genome_${{ matrix.job }}.txt
+            rm -f "out/$SEED.log"
+          }
+          export -f play; export POP
+          printf '%s\n' ${{ matrix.games }} | xargs -P 2 -I{} bash -c 'play {}'
+          cat out/evo_${{ matrix.job }}.txt || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evo-games-${{ matrix.job }}
+          path: out/
+
+  score:
+    needs: [plan, games]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: wesleywesleyadams-debug/Aegis-Matrix
+          ssh-key: ${{ secrets.AEGIS_DEPLOY_KEY }}
+          ref: ${{ inputs.game_ref }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/dl
+      - name: Score
+        run: |
+          mkdir -p state
+          python3 tools/evolve.py score ${{ runner.temp }}/dl/evo-plan/plan.json ${{ runner.temp }}/dl state/state.json | tee -a "$GITHUB_STEP_SUMMARY"
+          cat ${{ runner.temp }}/dl/evo-games-*/genome_*.txt > state/genome_log.txt 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evo-state
+          path: state/
+      - name: Next generation
+        if: inputs.gens > 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run evolve.yml -R ${{ github.repository }} \
+            -f game_ref=${{ inputs.game_ref }} -f parent_run=${{ github.run_id }} \
+            -f gens=$(( ${{ inputs.gens }} - 1 )) -f per=${{ inputs.per }} \
+            -f minutes=${{ inputs.minutes }} -f speed=${{ inputs.speed }}
