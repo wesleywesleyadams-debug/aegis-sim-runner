@@ -4,14 +4,19 @@
 # itself until `gens` reaches 0. Only genome JSON and result lines are
 # uploaded; game files never leave the job.
 name: Evolve AI
-run-name: "Evolve gen ${{ inputs.parent_run == '' && '0' || 'next' }} (${{ inputs.gens }} left) ${{ inputs.game_ref }}"
+run-name: "${{ inputs.mode }}: gen ${{ inputs.parent_run == '' && '0' || 'next' }} (${{ inputs.gens }} left) ${{ inputs.game_ref }}"
 
 on:
   workflow_dispatch:
     inputs:
       game_ref:
         description: "Game branch with genome support"
-        default: "evo"
+        default: "main"
+      mode:
+        description: "evolve, or validate (parent_run's hall of fame, `per` games each vs ref)"
+        type: choice
+        options: [evolve, validate]
+        default: evolve
       parent_run:
         description: "Run id of the previous generation ('' = start fresh)"
         default: ""
@@ -54,7 +59,8 @@ jobs:
       - id: p
         run: |
           S=prev/state.json; [ -f "$S" ] || S=-
-          echo "matrix=$(python3 tools/evolve.py plan $S evo ${{ inputs.per }})" >> "$GITHUB_OUTPUT"
+          CMD=plan; [ "${{ inputs.mode }}" = validate ] && CMD=vplan
+          echo "matrix=$(python3 tools/evolve.py $CMD $S evo ${{ inputs.per }})" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: evo-plan
@@ -136,7 +142,7 @@ jobs:
           name: evo-state
           path: state/
       - name: Next generation
-        if: inputs.gens > 1
+        if: inputs.gens > 1 && inputs.mode == 'evolve'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
