@@ -1,0 +1,72 @@
+# Plays one batch of Evolve AI games (called by evolve.yml; not run by hand).
+# Each job plays the games in its "games" list ("p1,p2,system,seed" ...), two
+# at once. "ref" = the baseline: the run's promoted champion (pop/ref.json)
+# if there is one, else the game's own default.
+name: Evolve AI games
+
+on:
+  workflow_call:
+    inputs:
+      matrix: {type: string, required: true}
+      game_ref: {type: string, required: true}
+      minutes: {type: string, required: true}
+      speed: {type: string, required: true}
+    secrets:
+      AEGIS_DEPLOY_KEY: {required: true}
+
+env:
+  GODOT_URL: https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/Godot_v4.7.2-stable_linux.x86_64.zip
+
+jobs:
+  play:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: wesleywesleyadams-debug/Aegis-Matrix
+          ssh-key: ${{ secrets.AEGIS_DEPLOY_KEY }}
+          ref: ${{ inputs.game_ref }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: evo-plan
+          path: ${{ runner.temp }}/evo
+      - name: Get Godot
+        run: |
+          curl -sSL "$GODOT_URL" -o godot.zip
+          unzip -q godot.zip
+          mv Godot_v4.7.2-stable_linux.x86_64 godot
+          chmod +x godot
+      - name: Import assets
+        run: ./godot --headless --import --path . || true
+      - name: Play
+        env:
+          POP: ${{ runner.temp }}/evo/pop
+          MINUTES: ${{ inputs.minutes }}
+          SPEED: ${{ inputs.speed }}
+          JOB: ${{ matrix.job }}
+        run: |
+          mkdir -p out
+          play() {
+            IFS=, read -r P1 P2 SYS SEED <<< "$1"
+            gfile() { [ -f "$POP/$1.json" ] && echo "$POP/$1.json" || echo ""; }
+            SL_GENOME_1="$(gfile $P1)" SL_GENOME_2="$(gfile $P2)" SL_SYSTEM=$SYS SL_SIM=evo_$SEED SL_SEED=$SEED SL_PLAYERS=2 \
+            SL_SIM_MINUTES=$MINUTES SL_SIM_SCALE=$SPEED \
+              timeout 6000 ./godot --headless --fixed-fps 60 --path . scenes/Main.tscn > "out/$SEED.log" 2>&1 || true
+            grep -E "^GENOME" "out/$SEED.log" | sed "s/^/[$SEED] /" >> out/genome_$JOB.txt || true
+            grep -m1 "SIM RESULT" "out/$SEED.log" | sed "s/^/EVO p1=$P1 p2=$P2 seed=$SEED /" >> out/evo_$JOB.txt || true
+            echo "script errors: $(grep -c 'SCRIPT ERROR' out/$SEED.log)" >> out/genome_$JOB.txt
+            rm -f "out/$SEED.log"
+          }
+          export -f play
+          printf '%s\n' ${{ matrix.games }} | xargs -P 2 -I{} bash -c 'play {}'
+          cat out/evo_$JOB.txt || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evo-games-${{ matrix.job }}
+          path: out/

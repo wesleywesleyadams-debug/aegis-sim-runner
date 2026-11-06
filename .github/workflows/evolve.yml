@@ -1,7 +1,8 @@
 # Evolution of the scripted AI (Aegis-Matrix docs/AI_DESIGN.md, "Evolution").
 # One run = one generation: plan (breed genomes from the parent run's state),
-# play every game in parallel jobs, score, then start the next generation
-# itself until `gens` reaches 0. Only genome JSON and result lines are
+# stage 1 (every genome plays per/2 games), stage 2 (the top half plays
+# per/2 more), score (champion ladder: see tools/evolve.py), then start the
+# next generation itself until `gens` reaches 0. Only genome JSON and result lines are
 # uploaded; game files never leave the job.
 name: Evolve AI
 run-name: "${{ inputs.mode }}: gen ${{ inputs.parent_run == '' && '0' || 'next' }} (${{ inputs.gens }} left) ${{ inputs.game_ref }}"
@@ -24,8 +25,8 @@ on:
         description: "Generations left to run (this one included)"
         default: "1"
       per:
-        description: "Games per genome per generation (half vs the AI as written)"
-        default: "6"
+        description: "Games per genome per generation (half vs the baseline; the top half of genomes plays the second half)"
+        default: "16"
       only:
         description: "validate: genome ids to test (space separated, '' = whole hall of fame)"
         default: ""
@@ -73,12 +74,23 @@ jobs:
 
   games:
     needs: plan
+    uses: ./.github/workflows/evo-games.yml
+    with:
+      matrix: ${{ needs.plan.outputs.matrix }}
+      game_ref: ${{ inputs.game_ref }}
+      minutes: ${{ inputs.minutes }}
+      speed: ${{ inputs.speed }}
+    secrets:
+      AEGIS_DEPLOY_KEY: ${{ secrets.AEGIS_DEPLOY_KEY }}
+
+  # Stage 2: the top half by stage-1 fitness plays the rest of its games
+  # (skipped for validation, and on game refs whose evolve.py has no plan2).
+  mid:
+    needs: [plan, games]
+    if: always() && needs.plan.result == 'success' && inputs.mode == 'evolve'
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    outputs:
+      matrix: ${{ steps.p.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -88,43 +100,27 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
-          name: evo-plan
-          path: ${{ runner.temp }}/evo
-      - name: Get Godot
+          path: ${{ runner.temp }}/dl
+      - id: p
         run: |
-          curl -sSL "$GODOT_URL" -o godot.zip
-          unzip -q godot.zip
-          mv Godot_v4.7.2-stable_linux.x86_64 godot
-          chmod +x godot
-      - name: Import assets
-        run: ./godot --headless --import --path . || true
-      - name: Play
-        env:
-          POP: ${{ runner.temp }}/evo/pop
-        run: |
-          mkdir -p out
-          play() {
-            IFS=, read -r P1 P2 SYS SEED <<< "$1"
-            G1=""; [ "$P1" != ref ] && G1="$POP/$P1.json"
-            G2=""; [ "$P2" != ref ] && G2="$POP/$P2.json"
-            SL_GENOME_1="$G1" SL_GENOME_2="$G2" SL_SYSTEM=$SYS SL_SIM=evo_$SEED SL_SEED=$SEED SL_PLAYERS=2 \
-            SL_SIM_MINUTES=${{ inputs.minutes }} SL_SIM_SCALE=${{ inputs.speed }} \
-              timeout 6000 ./godot --headless --fixed-fps 60 --path . scenes/Main.tscn > "out/$SEED.log" 2>&1 || true
-            grep -E "^GENOME" "out/$SEED.log" | sed "s/^/[$SEED] /" >> out/genome_${{ matrix.job }}.txt || true
-            grep -m1 "SIM RESULT" "out/$SEED.log" | sed "s/^/EVO p1=$P1 p2=$P2 seed=$SEED /" >> out/evo_${{ matrix.job }}.txt || true
-            echo "script errors: $(grep -c 'SCRIPT ERROR' out/$SEED.log)" >> out/genome_${{ matrix.job }}.txt
-            rm -f "out/$SEED.log"
-          }
-          export -f play; export POP
-          printf '%s\n' ${{ matrix.games }} | xargs -P 2 -I{} bash -c 'play {}'
-          cat out/evo_${{ matrix.job }}.txt || true
-      - uses: actions/upload-artifact@v4
-        with:
-          name: evo-games-${{ matrix.job }}
-          path: out/
+          M='[]'
+          grep -q "def plan2" tools/evolve.py && M=$(python3 tools/evolve.py plan2 ${{ runner.temp }}/dl/evo-plan/plan.json ${{ runner.temp }}/dl)
+          echo "matrix=$M" >> "$GITHUB_OUTPUT"
+
+  games2:
+    needs: mid
+    if: always() && needs.mid.result == 'success' && needs.mid.outputs.matrix != '[]'
+    uses: ./.github/workflows/evo-games.yml
+    with:
+      matrix: ${{ needs.mid.outputs.matrix }}
+      game_ref: ${{ inputs.game_ref }}
+      minutes: ${{ inputs.minutes }}
+      speed: ${{ inputs.speed }}
+    secrets:
+      AEGIS_DEPLOY_KEY: ${{ secrets.AEGIS_DEPLOY_KEY }}
 
   score:
-    needs: [plan, games]
+    needs: [plan, games, mid, games2]
     if: always() && needs.plan.result == 'success'
     runs-on: ubuntu-latest
     steps:
