@@ -55,7 +55,7 @@ jobs:
           play() {
             IFS=, read -r P1 P2 SYS SEED <<< "$1"
             gfile() { [ -f "$POP/$1.json" ] && echo "$POP/$1.json" || echo ""; }
-            SL_GENOME_1="$(gfile $P1)" SL_GENOME_2="$(gfile $P2)" SL_SYSTEM=$SYS SL_SIM=evo_$SEED SL_SEED=$SEED SL_PLAYERS=2 \
+            SL_EXPLORE=1 SL_GENOME_1="$(gfile $P1)" SL_GENOME_2="$(gfile $P2)" SL_SYSTEM=$SYS SL_SIM=evo_$SEED SL_SEED=$SEED SL_PLAYERS=2 \
             SL_SIM_MINUTES=$MINUTES SL_SIM_SCALE=$SPEED \
               timeout 6000 ./godot --headless --fixed-fps 60 --path . scenes/Main.tscn > "out/$SEED.log" 2>&1 || true
             grep -E "^GENOME" "out/$SEED.log" | sed "s/^/[$SEED] /" >> out/genome_$JOB.txt || true
