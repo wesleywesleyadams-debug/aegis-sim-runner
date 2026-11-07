@@ -55,10 +55,13 @@ jobs:
           play() {
             IFS=, read -r P1 P2 SYS SEED <<< "$1"
             gfile() { [ -f "$POP/$1.json" ] && echo "$POP/$1.json" || echo ""; }
-            SL_EXPLORE=1 SL_GENOME_1="$(gfile $P1)" SL_GENOME_2="$(gfile $P2)" SL_SYSTEM=$SYS SL_SIM=evo_$SEED SL_SEED=$SEED SL_PLAYERS=2 \
+            NOV=""; [ -f "$POP/novelty.json" ] && NOV="$POP/novelty.json"
+            SL_NOVELTY_FILE="$NOV" SL_EXPLORE=1 SL_GENOME_1="$(gfile $P1)" SL_GENOME_2="$(gfile $P2)" SL_SYSTEM=$SYS SL_SIM=evo_$SEED SL_SEED=$SEED SL_PLAYERS=2 \
             SL_SIM_MINUTES=$MINUTES SL_SIM_SCALE=$SPEED \
               timeout 6000 ./godot --headless --fixed-fps 60 --path . scenes/Main.tscn > "out/$SEED.log" 2>&1 || true
             grep -E "^GENOME" "out/$SEED.log" | sed "s/^/[$SEED] /" >> out/genome_$JOB.txt || true
+            # Options each side took (EVOTRIED), by genome id: the champion's tried set.
+            grep "^EVOTRIED" "out/$SEED.log" | awk -v a="$P1" -v b="$P2" '{print "TRIED", ($2 == "P1" ? a : b), $3}' >> out/tried_$JOB.txt || true
             # P1's share of the two sides' net worth, averaged over the game
             # (EVONW lines, once a game minute; absent on older game refs).
             NW=$(grep "^EVONW" "out/$SEED.log" | awk '{a=$3; b=$4; sub("p1=","",a); sub("p2=","",b); if (a+b > 0) {s += a/(a+b); n++}} END {if (n) printf " nwshare=%.3f", s/n}')
