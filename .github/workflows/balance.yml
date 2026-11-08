@@ -107,9 +107,22 @@ jobs:
           ssh-key: ${{ secrets.AEGIS_DEPLOY_KEY }}
           ref: ${{ inputs.mode == 'nn_batch' && 'nn-train' || inputs.game_ref }}
           persist-credentials: false
+      - name: Cache Godot
+        uses: actions/cache@v4
+        with:
+          path: godot.zip
+          key: godot-${{ env.GODOT_URL }}
       - name: Get Godot
         run: |
-          curl -sSL "$GODOT_URL" -o godot.zip
+          # Retry the download (GitHub releases sometimes 504) and only
+          # accept a file that is a valid zip; the cache skips it entirely.
+          for i in 1 2 3 4 5 6 7 8; do
+            unzip -tq godot.zip >/dev/null 2>&1 && break
+            rm -f godot.zip
+            curl -sSL --retry 3 --max-time 300 "$GODOT_URL" -o godot.zip || true
+            unzip -tq godot.zip >/dev/null 2>&1 && break
+            echo "download try $i failed"; sleep $((i * 20))
+          done
           unzip -q godot.zip
           mv Godot_v4.7.2-stable_linux.x86_64 godot
           chmod +x godot
