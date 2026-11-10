@@ -69,9 +69,13 @@ jobs:
           cd game; mkdir -p ../out
           U="$HOME/.local/share/godot/app_userdata/Aegis Matrix/sims"
           for r in $(seq 1 ${{ inputs.rounds }}); do for L in ${{ inputs.labels }}; do
-            id="par_${L}_${SEED}_${r}"; BX=$L; [ "$L" = base ] && BX=""
+            # A label NAME=VALUE sets that env var instead (e.g. SL_NO_NATIVE_TGT=1).
+            BX=$L; EXTRA=""; [ "$L" = base ] && BX=""
+            case "$L" in *=*) BX=""; EXTRA="$L";; esac
+            id="par_$(echo "$L" | tr -c 'A-Za-z0-9
+' '-')_${SEED}_${r}"
             start=$(date +%s.%N)
-            SL_BX=$BX SL_SIM=$id SL_SEED=$SEED SL_PLAYERS=2 SL_SIM_MINUTES=${{ inputs.minutes }} SL_SIM_SCALE=8 \
+            env $EXTRA SL_BX=$BX SL_SIM=$id SL_SEED=$SEED SL_PLAYERS=2 SL_SIM_MINUTES=${{ inputs.minutes }} SL_SIM_SCALE=8 \
               timeout 6000 ./godot --headless --fixed-fps 60 --path . scenes/Main.tscn 2>&1 \
               | while IFS= read -r l; do case "$l" in EVONW*|"SIM RESULT"*|"SCRIPT ERROR"*) printf 'W=%.1f %s\n' "$(echo "$(date +%s.%N) - $start" | bc)" "$l";; esac; done > ../out/$id.log
             cp "$U"/*_"$id".json ../out/ 2>/dev/null || true
