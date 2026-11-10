@@ -1,7 +1,7 @@
 # Timer-free speed A/B (scripted AI session + Performance). One job per seed;
 # each job plays every label in turn on the same VM, ROUNDS times, one game at
 # a time, so labels are compared on identical hardware. With patch=true,
-# bench/bx_hooks.patch is applied: env SL_BX=<label> makes that candidate do
+# bench/bx_hooks.patch (from Aegis-Matrix main, tools/) is applied: env SL_BX=<label> makes that candidate do
 # its work twice (game unchanged), so the extra wall time is its cost.
 # "base" = no doubling. Each EVONW line (once per game-minute) is stamped with
 # wall seconds. Results: artifact bench-<seed>.
@@ -41,9 +41,19 @@ jobs:
           ref: ${{ inputs.game_ref }}
           path: game
           persist-credentials: false
+      - name: Fetch hook patches (kept private in Aegis-Matrix main, tools/bench)
+        if: inputs.patch == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: wesleywesleyadams-debug/Aegis-Matrix
+          ssh-key: ${{ secrets.AEGIS_DEPLOY_KEY }}
+          ref: main
+          path: hooks
+          sparse-checkout: tools/bench
+          persist-credentials: false
       - name: Apply hooks
         if: inputs.patch == 'true'
-        run: cd game && git apply ../runner/${{ inputs.patch_file }}
+        run: cd game && git apply ../hooks/tools/${{ inputs.patch_file }}
       - name: Cache Godot
         uses: actions/cache@v4
         with:
