@@ -16,6 +16,7 @@ on:
       rounds: {description: "Rounds per job", default: "2"}
       minutes: {description: "Game minutes", default: "16"}
       patch: {description: "Apply bench/bx_hooks.patch", default: "true"}
+      patch_file: {description: "Hooks patch to apply (bench/...)", default: "bench/bx_hooks.patch"}
 
 env:
   GODOT_URL: https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/Godot_v4.7.2-stable_linux.x86_64.zip
@@ -42,7 +43,7 @@ jobs:
           persist-credentials: false
       - name: Apply hooks
         if: inputs.patch == 'true'
-        run: cd game && git apply ../runner/bench/bx_hooks.patch
+        run: cd game && git apply ../runner/${{ inputs.patch_file }}
       - name: Cache Godot
         uses: actions/cache@v4
         with:
