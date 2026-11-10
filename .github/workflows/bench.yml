@@ -72,8 +72,7 @@ jobs:
             # A label NAME=VALUE sets that env var instead (e.g. SL_NO_NATIVE_TGT=1).
             BX=$L; EXTRA=""; [ "$L" = base ] && BX=""
             case "$L" in *=*) BX=""; EXTRA="$L";; esac
-            id="par_$(echo "$L" | tr -c 'A-Za-z0-9
-' '-')_${SEED}_${r}"
+            id="par_$(echo "$L" | sed 's/[^A-Za-z0-9]/-/g')_${SEED}_${r}"
             start=$(date +%s.%N)
             env $EXTRA SL_BX=$BX SL_SIM=$id SL_SEED=$SEED SL_PLAYERS=2 SL_SIM_MINUTES=${{ inputs.minutes }} SL_SIM_SCALE=8 \
               timeout 6000 ./godot --headless --fixed-fps 60 --path . scenes/Main.tscn 2>&1 \
