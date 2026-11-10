@@ -1,0 +1,83 @@
+# Timer-free speed A/B (scripted AI session + Performance). One job per seed;
+# each job plays every label in turn on the same VM, ROUNDS times, one game at
+# a time, so labels are compared on identical hardware. With patch=true,
+# bench/bx_hooks.patch is applied: env SL_BX=<label> makes that candidate do
+# its work twice (game unchanged), so the extra wall time is its cost.
+# "base" = no doubling. Each EVONW line (once per game-minute) is stamped with
+# wall seconds. Results: artifact bench-<seed>.
+name: Bench
+
+on:
+  workflow_dispatch:
+    inputs:
+      game_ref: {description: "Aegis-Matrix ref", required: true}
+      labels: {description: "Space-separated labels (base tgt vis neb inneb)", default: "base tgt vis neb inneb"}
+      seeds: {description: "JSON list of seeds", default: "[1,2,3,4,5,6]"}
+      rounds: {description: "Rounds per job", default: "2"}
+      minutes: {description: "Game minutes", default: "16"}
+      patch: {description: "Apply bench/bx_hooks.patch", default: "true"}
+
+env:
+  GODOT_URL: https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/Godot_v4.7.2-stable_linux.x86_64.zip
+
+jobs:
+  bench:
+    if: github.repository_owner == 'wesleywesleyadams-debug'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: ${{ fromJSON(inputs.seeds) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: runner
+      - uses: actions/checkout@v4
+        with:
+          repository: wesleywesleyadams-debug/Aegis-Matrix
+          ssh-key: ${{ secrets.AEGIS_DEPLOY_KEY }}
+          ref: ${{ inputs.game_ref }}
+          path: game
+          persist-credentials: false
+      - name: Apply hooks
+        if: inputs.patch == 'true'
+        run: cd game && git apply ../runner/bench/bx_hooks.patch
+      - name: Cache Godot
+        uses: actions/cache@v4
+        with:
+          path: godot.zip
+          key: godot-${{ env.GODOT_URL }}
+      - name: Get Godot
+        run: |
+          for i in 1 2 3 4 5 6 7 8; do
+            unzip -tq godot.zip >/dev/null 2>&1 && break
+            rm -f godot.zip
+            curl -sSL --retry 3 --max-time 300 "$GODOT_URL" -o godot.zip || true
+            unzip -tq godot.zip >/dev/null 2>&1 && break
+            echo "download try $i failed"; sleep $((i * 20))
+          done
+          unzip -q godot.zip
+          mv Godot_v4.7.2-stable_linux.x86_64 game/godot
+          chmod +x game/godot
+      - name: Import assets
+        run: cd game && ./godot --headless --import --path . || true
+      - name: Play
+        env:
+          SEED: ${{ matrix.seed }}
+        run: |
+          cd game; mkdir -p ../out
+          U="$HOME/.local/share/godot/app_userdata/Aegis Matrix/sims"
+          for r in $(seq 1 ${{ inputs.rounds }}); do for L in ${{ inputs.labels }}; do
+            id="par_${L}_${SEED}_${r}"; BX=$L; [ "$L" = base ] && BX=""
+            start=$(date +%s.%N)
+            SL_BX=$BX SL_SIM=$id SL_SEED=$SEED SL_PLAYERS=2 SL_SIM_MINUTES=${{ inputs.minutes }} SL_SIM_SCALE=8 \
+              timeout 6000 ./godot --headless --fixed-fps 60 --path . scenes/Main.tscn 2>&1 \
+              | while IFS= read -r l; do case "$l" in EVONW*|"SIM RESULT"*|"SCRIPT ERROR"*) printf 'W=%.1f %s\n' "$(echo "$(date +%s.%N) - $start" | bc)" "$l";; esac; done > ../out/$id.log
+            cp "$U"/*_"$id".json ../out/ 2>/dev/null || true
+            echo "$id: $(tail -1 ../out/$id.log | cut -c1-150)"
+          done; done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ matrix.seed }}
+          path: out/
