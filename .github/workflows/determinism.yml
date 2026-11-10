@@ -1,0 +1,70 @@
+# Lockstep determinism check (Multiplayer session). Plays the same seeded
+# AI-vs-AI match on Linux and Windows VMs with SL_CHECKSUM on and uploads
+# only the per-tick checksum lines (CHK), optional value dumps at one tick
+# (DUMP: numbers only) and the SIM RESULT line. No game files are printed or
+# uploaded. Compare the artifacts with each other and with a local run.
+name: Determinism
+
+on:
+  workflow_dispatch:
+    inputs:
+      game_ref: {description: "Aegis-Matrix ref", required: true}
+      seeds: {description: "JSON list of seeds", default: "[1]"}
+      os: {description: "JSON list of runner OSes", default: "[\"ubuntu-latest\", \"windows-latest\"]"}
+      minutes: {description: "Game minutes", default: "10"}
+      every: {description: "Print a CHK line every N ticks", default: "60"}
+      dump_tick: {description: "Tick to dump every hashed value at (-1 = none)", default: "-1"}
+      scale: {description: "SL_SIM_SCALE", default: "8"}
+      players: {description: "SL_PLAYERS", default: "2"}
+      env: {description: "Extra NAME=VALUE env vars, space separated", default: ""}
+
+env:
+  GODOT_VER: 4.7.2-stable
+
+jobs:
+  check:
+    if: github.repository_owner == 'wesleywesleyadams-debug'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.os) }}
+        seed: ${{ fromJSON(inputs.seeds) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: wesleywesleyadams-debug/Aegis-Matrix
+          ssh-key: ${{ secrets.AEGIS_DEPLOY_KEY }}
+          ref: ${{ inputs.game_ref }}
+          path: game
+          persist-credentials: false
+      - name: Get Godot
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then Z=Godot_v${GODOT_VER}_win64.exe.zip; else Z=Godot_v${GODOT_VER}_linux.x86_64.zip; fi
+          for i in 1 2 3 4 5 6; do
+            curl -sSL --retry 3 --max-time 300 "https://github.com/godotengine/godot-builds/releases/download/${GODOT_VER}/$Z" -o godot.zip && unzip -tq godot.zip >/dev/null 2>&1 && break
+            echo "download try $i failed"; sleep $((i * 20))
+          done
+          unzip -q godot.zip -d gd
+          if [ "$RUNNER_OS" = Windows ]; then mv gd/*_console.exe game/godot.exe; echo "G=./godot.exe" >> $GITHUB_ENV
+          else mv gd/Godot_v${GODOT_VER}_linux.x86_64 game/godot; chmod +x game/godot; echo "G=./godot" >> $GITHUB_ENV; fi
+      - name: Import assets
+        run: cd game && $G --headless --import --path . > /dev/null 2>&1 || true
+      - name: Play
+        run: |
+          cd game; mkdir -p ../out
+          id="det_${{ runner.os }}_${{ matrix.seed }}"
+          env ${{ inputs.env }} SL_SIM=$id SL_SEED=${{ matrix.seed }} SL_PLAYERS=${{ inputs.players }} SL_SIM_MINUTES=${{ inputs.minutes }} \
+            SL_SIM_SCALE=${{ inputs.scale }} SL_CHECKSUM=${{ inputs.every }} SL_CHECKSUM_DUMP=${{ inputs.dump_tick }} \
+            timeout 9000 $G --headless --fixed-fps 60 --path . scenes/Main.tscn 2>&1 \
+            | grep -E '^(CHK|DUMP) |^SIM RESULT|SCRIPT ERROR' | cut -c1-300 > ../out/$id.log || true
+          echo "$id: $(grep -c '^CHK' ../out/$id.log) CHK lines, $(grep -c 'SCRIPT ERROR' ../out/$id.log) script errors"
+          grep '^CHK' ../out/$id.log | tail -1 | cut -c1-60
+      - uses: actions/upload-artifact@v4
+        with:
+          name: det-${{ runner.os }}-${{ matrix.seed }}
+          path: out/
