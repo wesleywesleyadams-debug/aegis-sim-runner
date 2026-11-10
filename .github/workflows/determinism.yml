@@ -50,7 +50,7 @@ jobs:
             echo "download try $i failed"; sleep $((i * 20))
           done
           unzip -q godot.zip -d gd
-          if [ "$RUNNER_OS" = Windows ]; then mv gd/*_console.exe game/godot.exe; echo "G=./godot.exe" >> $GITHUB_ENV
+          if [ "$RUNNER_OS" = Windows ]; then mv gd/*.exe game/; echo "G=./Godot_v${GODOT_VER}_win64_console.exe" >> $GITHUB_ENV   # the console exe runs the main one beside it
           else mv gd/Godot_v${GODOT_VER}_linux.x86_64 game/godot; chmod +x game/godot; echo "G=./godot" >> $GITHUB_ENV; fi
       - name: Import assets
         run: cd game && $G --headless --import --path . > /dev/null 2>&1 || true
