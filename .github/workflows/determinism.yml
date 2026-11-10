@@ -13,7 +13,7 @@ on:
       os: {description: "JSON list of runner OSes", default: "[\"ubuntu-latest\", \"windows-latest\"]"}
       minutes: {description: "Game minutes", default: "10"}
       every: {description: "Print a CHK line every N ticks", default: "60"}
-      dump_tick: {description: "Tick to dump every hashed value at (-1 = none)", default: "-1"}
+      dump_tick: {description: "Tick (or a-b) to dump every hashed value at (-1 = none)", default: "-1"}
       scale: {description: "SL_SIM_SCALE", default: "8"}
       players: {description: "SL_PLAYERS", default: "2"}
       env: {description: "Extra NAME=VALUE env vars, space separated", default: ""}
