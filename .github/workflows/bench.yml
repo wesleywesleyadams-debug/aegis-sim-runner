@@ -68,7 +68,7 @@ jobs:
           SEED: ${{ matrix.seed }}
         run: |
           cd game; mkdir -p ../out
-          U="$HOME/.local/share/godot/app_userdata/Aegis Matrix/sims"
+          U="$HOME/.local/share/Godot/app_userdata/Aegis Matrix/sims"
           for r in $(seq 1 ${{ inputs.rounds }}); do for L in ${{ inputs.labels }}; do
             # A label NAME=VALUE sets that env var instead (e.g. SL_NO_NATIVE_TGT=1).
             BX=$L; EXTRA=""; [ "$L" = base ] && BX=""
