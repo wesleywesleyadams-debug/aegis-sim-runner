@@ -17,6 +17,8 @@ on:
       scale: {description: "SL_SIM_SCALE", default: "8"}
       players: {description: "SL_PLAYERS", default: "2"}
       env: {description: "Extra NAME=VALUE env vars, space separated", default: ""}
+      mode: {description: "sim | cmdtest (scripted human match + audit, then replay it) | replay (play replay_b64)", default: "sim"}
+      replay_b64: {description: "mode=replay: a .replay file, base64", default: ""}
 
 env:
   GODOT_VER: 4.7.2-stable
@@ -54,7 +56,25 @@ jobs:
           else mv gd/Godot_v${GODOT_VER}_linux.x86_64 game/godot; chmod +x game/godot; echo "G=./godot" >> $GITHUB_ENV; fi
       - name: Import assets
         run: cd game && $G --headless --import --path . > /dev/null 2>&1 || true
+      - name: Command test / replay
+        if: inputs.mode != 'sim'
+        env:
+          REPLAY_B64: ${{ inputs.replay_b64 }}
+        run: |
+          cd game; mkdir -p ../out
+          id="${{ inputs.mode }}_${{ runner.os }}_${{ matrix.seed }}"
+          if [ "${{ inputs.mode }}" = cmdtest ]; then
+            env ${{ inputs.env }} SL_SEED=${{ matrix.seed }} SL_CMD_TEST=1 SL_CMD_AUDIT=1 SL_CHECKSUM_QUIT=$((${{ inputs.minutes }} * 3600))               timeout 9000 $G --headless --path . scenes/Main.tscn 2>&1 | grep -E '^(CMDTEST|CMDAUDIT|REPLAY)|SCRIPT ERROR|refused' | cut -c1-300 > ../out/$id.log || true
+            R=$(find "$HOME" "${APPDATA:-/nonexistent}" -name '*.replay' -newer project.godot 2>/dev/null | head -1)
+          else
+            R="$RUNNER_TEMP/in.replay"; echo "$REPLAY_B64" | base64 -d > "$R"
+          fi
+          echo "replay file: $R"
+          [ -n "$R" ] && cp "$R" ../out/$id.replay
+          SL_REPLAY="$R" timeout 9000 $G --headless --path . scenes/Main.tscn 2>&1 | grep -E '^REPLAY|SCRIPT ERROR|refused' | cut -c1-300 >> ../out/$id.log || true
+          cat ../out/$id.log
       - name: Play
+        if: inputs.mode == 'sim'
         run: |
           cd game; mkdir -p ../out
           id="det_${{ runner.os }}_${{ matrix.seed }}"
