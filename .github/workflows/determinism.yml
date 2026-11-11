@@ -65,7 +65,7 @@ jobs:
           id="${{ inputs.mode }}_${{ runner.os }}_${{ matrix.seed }}"
           if [ "${{ inputs.mode }}" = cmdtest ]; then
             env ${{ inputs.env }} SL_SEED=${{ matrix.seed }} SL_CMD_TEST=1 SL_CMD_AUDIT=1 SL_CHECKSUM_QUIT=$((${{ inputs.minutes }} * 3600))               timeout 9000 $G --headless --path . scenes/Main.tscn 2>&1 | grep -E '^(CMDTEST|CMDAUDIT|REPLAY)|SCRIPT ERROR|refused' | cut -c1-300 > ../out/$id.log || true
-            R=$(find "$HOME" "${APPDATA:-/nonexistent}" -name '*.replay' -newer project.godot 2>/dev/null | head -1)
+            R=$( (find "$HOME/.local/share" "${APPDATA:-/nonexistent}" -name '*.replay' -newer project.godot 2>/dev/null || true) | head -1)
           else
             R="$RUNNER_TEMP/in.replay"; echo "$REPLAY_B64" | base64 -d > "$R"
           fi
