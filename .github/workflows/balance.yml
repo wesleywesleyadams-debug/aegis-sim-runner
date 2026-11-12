@@ -182,8 +182,11 @@ jobs:
           # out/rr_<part>_v<value>.txt (out/rr_<part>_v-.txt without values).
           # SL_DUEL_VALUE_VAR=<NAME> sets that variable instead of SL_MOD_DMG; the value
           # "none" leaves it unset (e.g. SL_DUEL_VALUE_VAR=SL_NO_QUIET SL_DUEL_VALUES=none,1).
-          VALS=$(env $EXTRA bash -c 'echo "${SL_DUEL_VALUES//,/ }"')
-          awk -v n=$N -v p=$P 'NF && (NR-1) % n == p {print $0, NR}' $PAIRS | while read -r pair ln; do for v in ${VALS:--}; do echo "$pair ${ln}_0 $v"; echo "$pair ${ln}_1 $v"; done; done |
+          # Values that contain commas (SL_MOD_SET) are separated by "|" instead.
+          # SL_DUEL_COPIES=<n> fights each line n times (default 2).
+          VALS=$(env $EXTRA bash -c 'v="$SL_DUEL_VALUES"; case "$v" in *"|"*) echo "${v//|/ }";; *) echo "${v//,/ }";; esac')
+          COPIES=$(env $EXTRA bash -c 'echo "${SL_DUEL_COPIES:-2}"')
+          awk -v n=$N -v p=$P 'NF && (NR-1) % n == p {print $0, NR}' $PAIRS | while read -r pair ln; do for v in ${VALS:--}; do for k in $(seq 0 $((COPIES-1))); do echo "$pair ${ln}_$k $v"; done; done; done |
             xargs -P 2 -L 1 env $EXTRA bash -c 'set -- "$1" "$2" "$3"; [ -n "$SL_DUEL_SEED" ] && export SL_SEED="${SL_DUEL_SEED}_$2"; [ "$3" != "-" ] && [ "$3" != "none" ] && export "${SL_DUEL_VALUE_VAR:-SL_MOD_DMG}=$3"; SL_DUEL=$1 SL_DUEL_BUDGET=${{ inputs.budget }} SL_DUEL_LIMIT=${{ inputs.minutes }} SL_DUEL_SPEED=${{ inputs.speed }} SL_NOFOG=1               timeout 900 ./godot --headless --fixed-fps 60 --path . scenes/Main.tscn 2>&1 | grep -E "^DUELP? |^DSTAT|SCRIPT ERROR" | sed "s|^|[$1] |" >> out/rr_${P}_v$3.txt' _ || true
       - name: Mark grid
         if: inputs.mode == 'mark_grid'
