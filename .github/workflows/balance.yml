@@ -177,8 +177,12 @@ jobs:
           EXTRA=""; case "${{ inputs.system }}" in *=*) EXTRA="${{ inputs.system }}";; esac
           # system=SL_DUEL_SEED=<base> seeds duel k of line L as "<base>_L_k" (paired A/B seeds:
           # the same pairs file gives every value the same seeds). Unset = random as before.
-          awk -v n=$N -v p=$P 'NF && (NR-1) % n == p {print $0, NR}' $PAIRS | while read -r pair ln; do echo "$pair ${ln}_0"; echo "$pair ${ln}_1"; done |
-            xargs -P 2 -L 1 env $EXTRA bash -c 'set -- "$1" "$2"; [ -n "$SL_DUEL_SEED" ] && export SL_SEED="${SL_DUEL_SEED}_$2"; SL_DUEL=$1 SL_DUEL_BUDGET=${{ inputs.budget }} SL_DUEL_LIMIT=${{ inputs.minutes }} SL_DUEL_SPEED=${{ inputs.speed }} SL_NOFOG=1               timeout 900 ./godot --headless --path . scenes/Main.tscn 2>&1 | grep -E "^DUELP? |^DSTAT|SCRIPT ERROR" | sed "s|^|[$1] |"' _ >> out/rr_$P.txt || true
+          # system=SL_DUEL_VALUES=<v1,v2,...> (with SL_MOD) fights every duel once per SL_MOD_DMG
+          # value in the same job (same machine, so paired seeds stay exact); results go to
+          # out/rr_<part>_v<value>.txt (out/rr_<part>_v-.txt without values).
+          VALS=$(env $EXTRA bash -c 'echo "${SL_DUEL_VALUES//,/ }"')
+          awk -v n=$N -v p=$P 'NF && (NR-1) % n == p {print $0, NR}' $PAIRS | while read -r pair ln; do for v in ${VALS:--}; do echo "$pair ${ln}_0 $v"; echo "$pair ${ln}_1 $v"; done; done |
+            xargs -P 2 -L 1 env $EXTRA bash -c 'set -- "$1" "$2" "$3"; [ -n "$SL_DUEL_SEED" ] && export SL_SEED="${SL_DUEL_SEED}_$2"; [ "$3" != "-" ] && export SL_MOD_DMG="$3"; SL_DUEL=$1 SL_DUEL_BUDGET=${{ inputs.budget }} SL_DUEL_LIMIT=${{ inputs.minutes }} SL_DUEL_SPEED=${{ inputs.speed }} SL_NOFOG=1               timeout 900 ./godot --headless --path . scenes/Main.tscn 2>&1 | grep -E "^DUELP? |^DSTAT|SCRIPT ERROR" | sed "s|^|[$1] |" >> out/rr_${P}_v$3.txt' _ || true
       - name: Mark grid
         if: inputs.mode == 'mark_grid'
         run: |
