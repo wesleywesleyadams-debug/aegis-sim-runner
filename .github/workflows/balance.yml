@@ -172,7 +172,7 @@ jobs:
         # prints DUELP part-way lines and a final DUEL line.
         run: |
           mkdir -p out
-          N=${{ inputs.runs }}; P=${{ matrix.part }}
+          N=${{ inputs.runs }}; P=${{ matrix.part }}; export P
           PAIRS=tools/rr_pairs.txt; [ "${{ inputs.tag }}" = "variants" ] && PAIRS=tools/variant_pairs.txt; case "${{ inputs.tag }}" in file=*) PAIRS="${{ inputs.tag }}"; PAIRS="${PAIRS#file=}";; esac
           EXTRA=""; case "${{ inputs.system }}" in *=*) EXTRA="${{ inputs.system }}";; esac
           # system=SL_DUEL_SEED=<base> seeds duel k of line L as "<base>_L_k" (paired A/B seeds:
