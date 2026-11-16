@@ -1,15 +1,13 @@
 # Regression suite for the private Aegis-Matrix repo (docs/REGRESSION.md there).
-# Free GitHub-hosted Linux runners. Every 30 minutes: the fast checks, if main
-# has a commit not tested yet (a stand-in for "on every push": this public
-# repo can't see the private one's pushes). Nightly: the full suite.
+# Free GitHub-hosted Linux runners. Once a day (the user's choice): the full
+# suite on main. Run by hand for a quick fast check.
 # This repo is public, so only the pass/fail table is published: no
 # screenshots, logs or game files. Picture checks run on the user's own PC.
 name: Regression
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # fast, when main moved
-    - cron: "17 3 * * *"     # full, nightly
+    - cron: "17 3 * * *"     # full, once a day (user's choice)
   workflow_dispatch:
     inputs:
       mode: {description: "fast | full", default: "fast"}
