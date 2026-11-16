@@ -1,0 +1,97 @@
+# Regression suite for the private Aegis-Matrix repo (docs/REGRESSION.md there).
+# Free GitHub-hosted Linux runners. Every 30 minutes: the fast checks, if main
+# has a commit not tested yet (a stand-in for "on every push": this public
+# repo can't see the private one's pushes). Nightly: the full suite.
+# This repo is public, so only the pass/fail table is published: no
+# screenshots, logs or game files. Picture checks run on the user's own PC.
+name: Regression
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # fast, when main moved
+    - cron: "17 3 * * *"     # full, nightly
+  workflow_dispatch:
+    inputs:
+      mode: {description: "fast | full", default: "fast"}
+      game_ref: {description: "Aegis-Matrix ref", default: "main"}
+
+env:
+  GODOT_VER: 4.7.2-stable
+
+jobs:
+  regress:
+    if: github.repository_owner == 'wesleywesleyadams-debug'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Mode and commit
+        id: m
+        env:
+          KEY: ${{ secrets.AEGIS_DEPLOY_KEY }}
+        run: |
+          mode="${{ inputs.mode }}"
+          [ -z "$mode" ] && { [ "${{ github.event.schedule }}" = "17 3 * * *" ] && mode=full || mode=fast; }
+          ref="${{ inputs.game_ref }}"; [ -z "$ref" ] && ref=main
+          mkdir -p ~/.ssh; echo "$KEY" > ~/.ssh/k; chmod 600 ~/.ssh/k
+          sha=$(GIT_SSH_COMMAND="ssh -i ~/.ssh/k -o StrictHostKeyChecking=accept-new" git ls-remote git@github.com:wesleywesleyadams-debug/Aegis-Matrix.git "$ref" | head -1 | cut -c1-40)
+          rm -f ~/.ssh/k
+          echo "mode=$mode" >> $GITHUB_OUTPUT; echo "sha=$sha" >> $GITHUB_OUTPUT
+          echo "$mode on $sha"
+      - name: Already tested?
+        id: seen
+        uses: actions/cache/restore@v4
+        with:
+          path: regress_last
+          key: regress-${{ steps.m.outputs.mode }}-${{ steps.m.outputs.sha }}
+          restore-keys: regress-${{ steps.m.outputs.mode }}-
+      - name: Skip
+        if: steps.seen.outputs.cache-hit == 'true' && github.event_name == 'schedule'
+        run: echo "main ${{ steps.m.outputs.sha }} already tested (${{ steps.m.outputs.mode }})"
+      - uses: actions/checkout@v4
+        if: steps.seen.outputs.cache-hit != 'true' || github.event_name != 'schedule'
+        with:
+          repository: wesleywesleyadams-debug/Aegis-Matrix
+          ssh-key: ${{ secrets.AEGIS_DEPLOY_KEY }}
+          ref: ${{ steps.m.outputs.sha }}
+          path: game
+          fetch-depth: 50
+          persist-credentials: false
+      - name: Run the suite
+        id: run
+        if: steps.seen.outputs.cache-hit != 'true' || github.event_name != 'schedule'
+        run: |
+          sudo apt-get -qq update >/dev/null && sudo apt-get -qq install -y xvfb libgl1-mesa-dri >/dev/null
+          Z=Godot_v${GODOT_VER}_linux.x86_64.zip
+          for i in 1 2 3 4 5; do curl -sSL --retry 3 --max-time 300 "https://github.com/godotengine/godot-builds/releases/download/${GODOT_VER}/$Z" -o godot.zip && unzip -tq godot.zip >/dev/null 2>&1 && break; sleep $((i * 20)); done
+          unzip -q godot.zip -d gd; mv gd/Godot_v${GODOT_VER}_linux.x86_64 game/godot; chmod +x game/godot
+          cd game
+          prev=$(cat ../regress_last/sha 2>/dev/null || true)
+          set +e
+          OUT=$RUNNER_TEMP/regress GODOT=./godot REGRESS_PICTURES=0 REGRESS_GODOT_ARGS="--rendering-driver opengl3" \
+            bash tools/regress.sh ${{ steps.m.outputs.mode }} > /dev/null 2>&1
+          rc=$?
+          set -e
+          mkdir -p ../pub
+          # Only the table: check names, pass/fail, short reasons.
+          cp $RUNNER_TEMP/regress/summary.md ../pub/summary.md
+          if [ -n "$prev" ] && [ "$prev" != "${{ steps.m.outputs.sha }}" ]; then
+            { echo; echo "Commits since the last $(echo ${{ steps.m.outputs.mode }}) run ($prev):"; git log --format='- %h %s' "$prev..HEAD" 2>/dev/null | head -30; } >> ../pub/summary.md
+          fi
+          cat ../pub/summary.md >> $GITHUB_STEP_SUMMARY
+          mkdir -p ../regress_last; echo "${{ steps.m.outputs.sha }}" > ../regress_last/sha
+          echo "rc=$rc" >> $GITHUB_OUTPUT
+      - uses: actions/cache/save@v4
+        if: always() && steps.run.outcome == 'success'
+        with:
+          path: regress_last
+          key: regress-${{ steps.m.outputs.mode }}-${{ steps.m.outputs.sha }}
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.run.outcome == 'success'
+        with:
+          name: regress-${{ steps.m.outputs.mode }}-${{ steps.m.outputs.sha }}
+          path: pub/summary.md
+      - name: Result
+        if: steps.run.outcome == 'success'
+        run: |
+          cat pub/summary.md
+          [ "${{ steps.run.outputs.rc }}" = 0 ] || { echo "::error::Regression checks failed on ${{ steps.m.outputs.sha }}"; exit 1; }
