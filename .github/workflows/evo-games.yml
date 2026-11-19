@@ -79,6 +79,10 @@ jobs:
             # (EVONW lines, once a game minute; absent on older game refs).
             NW=$(grep "^EVONW" "out/$SEED.log" | awk '{a=$3; b=$4; sub("p1=","",a); sub("p2=","",b); if (a+b > 0) {s += a/(a+b); n++}} END {if (n) printf " nwshare=%.3f", s/n}')
             grep -m1 "SIM RESULT" "out/$SEED.log" | sed "s/^/EVO p1=$P1 p2=$P2 seed=$SEED /; s/\$/$NW/" >> out/evo_$JOB.txt || true
+            # One JSON line per game for Balance (EVOGAME: models built, spent,
+            # alive, damage per side; absent on older game refs), with the
+            # two genome ids added.
+            grep "^EVOGAME " "out/$SEED.log" | sed 's/^EVOGAME //' | P1="$P1" P2="$P2" python3 -c 'import sys,json,os; [print(json.dumps(dict(json.loads(l), g1=os.environ["P1"], g2=os.environ["P2"]))) for l in sys.stdin if l.strip()]' >> out/games_$JOB.jsonl || true
             echo "script errors: $(grep -c 'SCRIPT ERROR' out/$SEED.log)" >> out/genome_$JOB.txt
             rm -f "out/$SEED.log"
           }

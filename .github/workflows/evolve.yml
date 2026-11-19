@@ -67,6 +67,8 @@ jobs:
           S=prev/state.json; [ -f "$S" ] || S=-
           CMD=plan; [ "${{ inputs.mode }}" = validate ] && CMD=vplan
           echo "matrix=$(python3 tools/evolve.py $CMD $S evo ${{ inputs.per }})" >> "$GITHUB_OUTPUT"
+          # The chain's per-game log so far (games.jsonl), carried forward.
+          [ -f prev/games.jsonl ] && cp prev/games.jsonl evo/games_prev.jsonl || true
       - uses: actions/upload-artifact@v4
         with:
           name: evo-plan
@@ -138,6 +140,25 @@ jobs:
           mkdir -p state
           python3 tools/evolve.py score ${{ runner.temp }}/dl/evo-plan/plan.json ${{ runner.temp }}/dl state/state.json | tee -a "$GITHUB_STEP_SUMMARY"
           cat ${{ runner.temp }}/dl/evo-games-*/genome_*.txt > state/genome_log.txt 2>/dev/null || true
+          # Per-game log (EVOGAME lines) for Balance: the chain's earlier games
+          # plus this generation's, each tagged with its gen and a game id.
+          D=${{ runner.temp }}/dl
+          python3 - "$D" > state/games.jsonl <<'PY' || true
+          import glob, json, os, sys
+          d = sys.argv[1]
+          prev = os.path.join(d, 'evo-plan', 'games_prev.jsonl')
+          if os.path.exists(prev):
+              sys.stdout.write(open(prev).read())
+          gen = json.load(open(os.path.join(d, 'evo-plan', 'plan.json'))).get('gen', '')
+          for f in sorted(glob.glob(os.path.join(d, 'evo-games-*', 'games_*.jsonl'))):
+              for l in open(f):
+                  if l.strip():
+                      g = json.loads(l)
+                      g['gen'] = gen
+                      g['game'] = '%s-%s-%s' % ('${{ github.run_id }}', gen, g.get('seed', ''))
+                      print(json.dumps(g))
+          PY
+          echo "games logged: $(wc -l < state/games.jsonl)"
       - uses: actions/upload-artifact@v4
         with:
           name: evo-state
